@@ -137,24 +137,25 @@ get_mechanisms(_LServer, _State) ->
 ua_hash(UA) ->
     crypto:hash(sha256, UA).
 
+get_tokens(_LServer, _LUser, undefined) ->
+    [];
 get_tokens(LServer, LUser, UA) ->
     Mod = gen_mod:db_mod(LServer, ?MODULE),
-    lists:map(
-	fun({Type, Token, CreatedAt}) ->
-	    {{Type, CreatedAt < ToRefresh}, Token}
-	end, Mod:get_tokens(LServer, LUser, ua_hash(UA))).
     ToRefresh = erlang:system_time(second) - (mod_auth_fast_opt:token_refresh_age(LServer) div 1000),
+    [{{Type, CreatedAt < ToRefresh}, Token} || {Type, Token, CreatedAt} <- Mod:get_tokens(LServer, LUser, ua_hash(UA))].
 
 c2s_inline_features({Sasl, Bind, Extra}, Host, State) ->
     {Sasl ++ [#fast{mechs = get_mechanisms(Host, State)}], Bind, Extra}.
 
-gen_token(#{sasl2_ua_id := UA, server := Server, user := User}) ->
+gen_token(Server, User, UA) ->
     Mod = gen_mod:db_mod(Server, ?MODULE),
     Token = base64:encode(ua_hash(<<UA/binary, (p1_rand:get_string())/binary>>)),
     ExpiresAt = erlang:system_time(second) + (mod_auth_fast_opt:token_lifetime(Server) div 1000),
     Mod:set_token(Server, User, ua_hash(UA), next, Token, ExpiresAt),
     #fast_token{token = Token, expiry = misc:usec_to_now(ExpiresAt*1000000)}.
 
+c2s_handle_sasl2_inline({#{sasl2_ua_id := undefined}, _, _} = Acc) ->
+    Acc;
 c2s_handle_sasl2_inline({#{server := Server, user := User, sasl2_ua_id := UA,
 			   sasl2_axtra_auth_info := Extra} = State, Els, Results} = Acc) ->
     Mod = gen_mod:db_mod(Server, ?MODULE),
@@ -171,14 +172,14 @@ c2s_handle_sasl2_inline({#{server := Server, user := User, sasl2_ua_id := UA,
     case {lists:keyfind(fast_request_token, 1, Els), lists:keyfind(fast, 1, Els)} of
 	{#fast_request_token{mech = _Mech}, #fast{invalidate = true}} ->
 	    Mod:del_token(Server, User, ua_hash(UA), current),
-	    {State, Els, [gen_token(State) | Results]};
+	    {State, Els, [gen_token(Server, User, UA) | Results]};
 	{_, #fast{invalidate = true}} ->
 	    Mod:del_token(Server, User, ua_hash(UA), current),
 	    Acc;
 	{#fast_request_token{mech = _Mech}, _} ->
-	    {State, Els, [gen_token(State) | Results]};
+	    {State, Els, [gen_token(Server, User, UA) | Results]};
 	_ when NeedRegen ->
-	    {State, Els, [gen_token(State) | Results]};
+	    {State, Els, [gen_token(Server, User, UA) | Results]};
 	_ ->
 	    Acc
     end.
