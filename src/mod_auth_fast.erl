@@ -89,8 +89,8 @@ mod_opt_type(token_refresh_age) ->
 -spec mod_options(binary()) -> [{atom(), any()}].
 mod_options(Host) ->
     [{db_type, ejabberd_config:default_db(Host, ?MODULE)},
-     {token_lifetime, 30*24*60*60},
-     {token_refresh_age, 24*60*60}].
+     {token_lifetime, 30*24*60*60*1000},
+     {token_refresh_age, 24*60*60*1000}].
 
 mod_doc() ->
     #{desc =>
@@ -139,11 +139,11 @@ ua_hash(UA) ->
 
 get_tokens(LServer, LUser, UA) ->
     Mod = gen_mod:db_mod(LServer, ?MODULE),
-    ToRefresh = erlang:system_time(second) - mod_auth_fast_opt:token_refresh_age(LServer),
     lists:map(
 	fun({Type, Token, CreatedAt}) ->
 	    {{Type, CreatedAt < ToRefresh}, Token}
 	end, Mod:get_tokens(LServer, LUser, ua_hash(UA))).
+    ToRefresh = erlang:system_time(second) - (mod_auth_fast_opt:token_refresh_age(LServer) div 1000),
 
 c2s_inline_features({Sasl, Bind, Extra}, Host, State) ->
     {Sasl ++ [#fast{mechs = get_mechanisms(Host, State)}], Bind, Extra}.
@@ -151,7 +151,7 @@ c2s_inline_features({Sasl, Bind, Extra}, Host, State) ->
 gen_token(#{sasl2_ua_id := UA, server := Server, user := User}) ->
     Mod = gen_mod:db_mod(Server, ?MODULE),
     Token = base64:encode(ua_hash(<<UA/binary, (p1_rand:get_string())/binary>>)),
-    ExpiresAt = erlang:system_time(second) + mod_auth_fast_opt:token_lifetime(Server),
+    ExpiresAt = erlang:system_time(second) + (mod_auth_fast_opt:token_lifetime(Server) div 1000),
     Mod:set_token(Server, User, ua_hash(UA), next, Token, ExpiresAt),
     #fast_token{token = Token, expiry = misc:usec_to_now(ExpiresAt*1000000)}.
 
